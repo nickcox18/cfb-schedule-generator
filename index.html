@@ -124,6 +124,9 @@
                 <th class="p-2 text-left font-medium">Team</th>
                 <th class="p-2 text-left font-medium">Conf</th>
                 <th class="p-2 text-right font-medium">OOC Need</th>
+                <th class="p-2 text-right font-medium">Tot Games</th>
+                <th class="p-2 text-right font-medium">BYEs</th>
+                <th class="p-2 text-right font-medium">Home</th>
                 <th v-for="w in 14" :key="w" class="p-2 text-center font-medium">W{{ w-1 }}</th>
               </tr>
             </thead>
@@ -137,6 +140,9 @@
                     {{ unscheduledForTeam(t) }} left
                   </span>
                 </td>
+                <td class="p-2 text-right whitespace-nowrap">{{ totalGamesForTeam(t) }}</td>
+                <td class="p-2 text-right whitespace-nowrap">{{ totalByesForTeam(t) }}</td>
+                <td class="p-2 text-right whitespace-nowrap">{{ totalHomeGamesForTeam(t) }}</td>
                 <td v-for="(wk, wIdx) in t.weeks" :key="wIdx" class="p-1">
                   <div
                     class="rounded px-1 py-1 text-center"

@@ -140,6 +140,31 @@ createApp({
       return remaining > 0 ? remaining : 0
     }
 
+    function totalGamesForTeam(t) {
+      let total = 0
+      for (const w of t.weeks) {
+        if (w.type === 'confHome' || w.type === 'confAway' || w.type === 'oocGame' || w.type === 'lockedOOC') total++
+      }
+      return total
+    }
+
+    function totalByesForTeam(t) {
+      let total = 0
+      for (const w of t.weeks) {
+        if (w.type === 'bye') total++
+      }
+      return total
+    }
+
+    function totalHomeGamesForTeam(t) {
+      let total = 0
+      for (const w of t.weeks) {
+        if (w.type === 'confHome') total++
+        else if ((w.type === 'oocGame' || w.type === 'lockedOOC') && w.away === false) total++
+      }
+      return total
+    }
+
     const stats = computed(() => {
       const s = { totalGames: 0, weekMost: { index: null, count: 0 }, weekLeast: { index: null, count: 0 } }
       if (!teams.value.length) return s
@@ -241,31 +266,32 @@ createApp({
       const byName = new Map()
       for (const t of ts) byName.set(t.name.trim().toLowerCase(), t)
 
-      const state = ts.map(t => {
-        let totalGames = 0
-        let homeGames = 0
-        let awayGames = 0
-        let lockedOOC = 0
-        const playedOpp = new Set()
-        const availableWeeks = []
-        for (let i = 0; i < t.weeks.length; i++) {
-          const w = t.weeks[i]
-          if (w.type === 'confHome') { totalGames++; homeGames++ }
-          else if (w.type === 'confAway') { totalGames++; awayGames++ }
-          else if (w.type === 'lockedOOC') {
-            totalGames++; lockedOOC++
-            if (w.away) awayGames++; else homeGames++
-            if (w.opponent) playedOpp.add(w.opponent.trim().toLowerCase())
-          } else if (w.type === 'oocGame') {
-            totalGames++
-            if (w.away) awayGames++; else homeGames++
-            if (w.opponent) playedOpp.add(w.opponent.trim().toLowerCase())
-          } else if (w.type === 'empty' || w.type === 'bye') {
-            availableWeeks.push(i)
-          }
+    const state = ts.map(t => {
+      let totalGames = 0
+      let homeGames = 0
+      let awayGames = 0
+      let lockedOOC = 0
+      let scheduledOOC = 0
+      const playedOpp = new Set()
+      const availableWeeks = []
+      for (let i = 0; i < t.weeks.length; i++) {
+        const w = t.weeks[i]
+        if (w.type === 'confHome') { totalGames++; homeGames++ }
+        else if (w.type === 'confAway') { totalGames++; awayGames++ }
+        else if (w.type === 'lockedOOC') {
+          totalGames++; lockedOOC++
+          if (w.away) awayGames++; else homeGames++
+          if (w.opponent) playedOpp.add(w.opponent.trim().toLowerCase())
+        } else if (w.type === 'oocGame') {
+          totalGames++; scheduledOOC++
+          if (w.away) awayGames++; else homeGames++
+          if (w.opponent) playedOpp.add(w.opponent.trim().toLowerCase())
+        } else if (w.type === 'empty' || w.type === 'bye') {
+          availableWeeks.push(i)
         }
-        // Remaining OOC to schedule is based on stated need minus locked OOC present
-        const oocRemaining = Math.max(0, (t.oocNeeded || 0) - lockedOOC)
+      }
+      // Remaining OOC = need - (already scheduled + locked)
+      const oocRemaining = Math.max(0, (t.oocNeeded || 0) - (lockedOOC + scheduledOOC))
         return {
           ref: t,
           name: t.name,
@@ -358,6 +384,15 @@ createApp({
     // Greedy, best-effort scheduler that does not require even parity
     function tryGenerateSchedule(baseTeams, avoidWeek0) {
       const working = deepCloneTeams(baseTeams)
+      // Start fresh each run: drop prior generated OOC and BYEs
+      for (const t of working) {
+        for (let i = 0; i < t.weeks.length; i++) {
+          const w = t.weeks[i]
+          if (w.type === 'oocGame' || w.type === 'bye') {
+            t.weeks[i] = { type: 'empty' }
+          }
+        }
+      }
       const { state } = computeTeamState(working)
 
       const beforeRemaining = state.reduce((s, t) => s + t.oocRemaining, 0)
@@ -401,6 +436,62 @@ createApp({
       return { ok: true, teams: working, unscheduled: afterRemaining, scheduledOOC: scheduled, neededOOC: beforeRemaining }
     }
 
+    // Post-processing: try to raise every team to at least minGames total by scheduling
+    // additional OOC games (beyond stated OOC needs) when possible, without breaking
+    // core constraints (max 12, weekly limit, no repeats, no same-conference).
+    function fairnessBoostMinimumGames(list, avoidWeek0, minGames = 9) {
+      const { state } = computeTeamState(list)
+      const weekOrder = (() => {
+        const w = Array.from({ length: 14 }, (_, i) => i)
+        if (avoidWeek0) return w.slice(1).concat([0])
+        return w
+      })()
+
+      function canPairLoose(a, b) {
+        if (!a || !b) return false
+        if (a.key === b.key) return false
+        if (a.conference === b.conference) return false
+        if (a.totalGames >= 12 || b.totalGames >= 12) return false
+        if (a.playedOpp.has(b.key) || b.playedOpp.has(a.key)) return false
+        return true
+      }
+
+      let progress = true
+      let added = 0
+      while (progress) {
+        progress = false
+        // sort teams by current totalGames asc, focus on those below minGames
+        const needers = state
+          .filter(s => s.totalGames < minGames)
+          .sort((a, b) => (a.totalGames - b.totalGames) || (a.availableWeeks.length - b.availableWeeks.length))
+        if (!needers.length) break
+        for (const t of needers) {
+          // candidate weeks for this team (respect avoidWeek0 ordering)
+          const weeks = weekOrder.filter(w => t.availableWeeks.includes(w))
+          let placed = false
+          for (const w of weeks) {
+            // choose an opponent with this week open, valid constraints
+            const opps = state
+              .filter(o => o !== t && o.availableWeeks.includes(w) && canPairLoose(t, o))
+              // prefer opponents with more total games to share load from stronger schedules
+              .sort((a, b) => (b.totalGames - a.totalGames) || (a.availableWeeks.length - b.availableWeeks.length))
+            const opp = opps[0]
+            if (opp) {
+              placeGameAtWeek(t, opp, w)
+              // clamp oocRemaining non-negative since we may exceed needs here
+              t.oocRemaining = Math.max(0, t.oocRemaining)
+              opp.oocRemaining = Math.max(0, opp.oocRemaining)
+              placed = true
+              progress = true
+              added++
+              break
+            }
+          }
+        }
+      }
+      return added
+    }
+
     function onGenerate() {
       if (!teams.value.length) return
       generating.value = true
@@ -410,6 +501,8 @@ createApp({
         generating.value = false
         if (result.ok) {
           teams.value = result.teams
+          // Boost teams below 9 total games if possible
+          fairnessBoostMinimumGames(teams.value, options.avoidWeek0, 9)
           assignByes(teams.value, options.avoidWeek0)
           if (result.unscheduled && result.unscheduled > 0) {
             status.type = 'warning'
@@ -503,6 +596,9 @@ createApp({
       options,
       stats,
       unscheduledForTeam,
+      totalGamesForTeam,
+      totalByesForTeam,
+      totalHomeGamesForTeam,
       onDrop,
       onFileChange,
       onReset,
@@ -513,4 +609,3 @@ createApp({
     }
   }
 }).mount('#app')
-
