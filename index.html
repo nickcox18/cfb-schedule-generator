@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>College Football OOC Schedule Generator</title>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Vue 3 (CDN) -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- PapaParse (CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  </head>
+  <body class="bg-gray-50 text-gray-900">
+    <div id="app" class="max-w-7xl mx-auto p-4 md:p-6">
+      <header class="mb-6">
+        <h1 class="text-2xl md:text-3xl font-bold">College Football OOC Schedule Generator</h1>
+        <p class="text-sm text-gray-600 mt-1">Single-page app (client-side only)</p>
+      </header>
+
+      <!-- Tabs -->
+      <nav class="mb-6 border-b border-gray-200">
+        <ul class="flex -mb-px">
+          <li>
+            <button
+              class="px-4 py-2 border-b-2"
+              :class="currentTab==='generator' ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-600 hover:text-gray-800'"
+              @click="currentTab='generator'"
+            >Schedule Generator</button>
+          </li>
+          <li class="ml-4">
+            <button
+              class="px-4 py-2 border-b-2"
+              :class="currentTab==='rules' ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-600 hover:text-gray-800'"
+              @click="currentTab='rules'"
+            >Rules & Format</button>
+          </li>
+        </ul>
+      </nav>
+
+      <!-- Main Views -->
+      <section v-if="currentTab==='generator'" class="space-y-6">
+        <!-- Upload + Controls -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- File Upload -->
+          <div class="lg:col-span-1">
+            <div
+              class="border-2 border-dashed rounded-md p-4 bg-white"
+              :class="dragActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300'"
+              @dragover.prevent="dragActive=true"
+              @dragleave.prevent="dragActive=false"
+              @drop.prevent="onDrop"
+            >
+              <p class="font-medium">Upload CSV</p>
+              <p class="text-sm text-gray-600 mb-3">Drag & drop or click to select</p>
+              <input type="file" accept=".csv" class="hidden" ref="fileInput" @change="onFileChange" />
+              <button class="px-3 py-2 text-sm rounded bg-blue-600 text-white" @click="$refs.fileInput.click()">Choose file</button>
+              <p v-if="fileName" class="mt-3 text-sm text-gray-700">
+                Loaded: <span class="font-mono">{{ fileName }}</span>
+              </p>
+              <p v-if="errors.length" class="mt-3 text-sm text-red-600">
+                {{ errors[0] }}
+              </p>
+            </div>
+          </div>
+
+          <!-- Controls and Status -->
+          <div class="lg:col-span-2 space-y-4">
+            <div class="bg-white rounded-md border border-gray-200 p-4">
+              <p class="font-medium mb-2">Options</p>
+              <label class="inline-flex items-center space-x-2">
+                <input type="checkbox" v-model="options.avoidWeek0" class="rounded border-gray-300" />
+                <span class="text-sm">Avoid Week 0 if possible</span>
+              </label>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <button class="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50" :disabled="!teams.length || generating" @click="onGenerate">Generate Schedule</button>
+              <button class="px-4 py-2 rounded bg-gray-100 text-gray-800 border border-gray-300 disabled:opacity-50" :disabled="!teams.length || generating" @click="onReset">Reset</button>
+              <button class="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50" :disabled="!teams.length || generating" @click="onExport">Export CSV</button>
+            </div>
+
+            <div v-if="status.message" class="text-sm" :class="status.type==='error' ? 'text-red-700' : (status.type==='success' ? 'text-green-700' : (status.type==='warning' ? 'text-amber-700' : 'text-gray-700'))">
+              {{ status.message }}
+            </div>
+
+            <div v-if="generating" class="text-sm text-blue-700">Generating... please wait</div>
+          </div>
+        </div>
+
+        <!-- Stats -->
+        <div v-if="teams.length" class="bg-white rounded-md border border-gray-200 p-4">
+          <p class="font-medium mb-2">Statistics</p>
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+            <div>
+              <p class="text-gray-500">Teams</p>
+              <p class="font-semibold">{{ teams.length }}</p>
+            </div>
+            <div>
+              <p class="text-gray-500">Total Games Scheduled</p>
+              <p class="font-semibold">{{ stats.totalGames }}</p>
+            </div>
+            <div>
+              <p class="text-gray-500">Weeks With Most Games</p>
+              <p class="font-semibold">{{ stats.weekMost.index !== null ? 'Week ' + stats.weekMost.index : '-' }} ({{ stats.weekMost.count }})</p>
+            </div>
+            <div>
+              <p class="text-gray-500">Weeks With Fewest Games</p>
+              <p class="font-semibold">{{ stats.weekLeast.index !== null ? 'Week ' + stats.weekLeast.index : '-' }} ({{ stats.weekLeast.count }})</p>
+            </div>
+            <div>
+              <p class="text-gray-500">Unscheduled OOC</p>
+              <p class="font-semibold">{{ teams.reduce((s,t)=> s + unscheduledForTeam(t), 0) }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div v-if="teams.length" class="overflow-x-auto bg-white rounded-md border border-gray-200">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-100 sticky top-0">
+              <tr>
+                <th class="p-2 text-left font-medium">Team</th>
+                <th class="p-2 text-left font-medium">Conf</th>
+                <th class="p-2 text-right font-medium">OOC Need</th>
+                <th v-for="w in 14" :key="w" class="p-2 text-center font-medium">W{{ w-1 }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(t, i) in teams" :key="i" class="border-t border-gray-100">
+                <td class="p-2 whitespace-nowrap" :class="unscheduledForTeam(t) > 0 ? 'bg-amber-100 font-medium' : ''">{{ t.name }}</td>
+                <td class="p-2 whitespace-nowrap">{{ t.conference }}</td>
+                <td class="p-2 text-right whitespace-nowrap" :class="unscheduledForTeam(t) > 0 ? 'bg-amber-50' : ''">
+                  {{ t.oocNeeded }}
+                  <span v-if="unscheduledForTeam(t) > 0" class="ml-2 inline-block px-2 py-0.5 text-xs rounded-full bg-amber-200 text-amber-900">
+                    {{ unscheduledForTeam(t) }} left
+                  </span>
+                </td>
+                <td v-for="(wk, wIdx) in t.weeks" :key="wIdx" class="p-1">
+                  <div
+                    class="rounded px-1 py-1 text-center"
+                    :class="[cellClass(wk), ((wk.type==='empty' || wk.type==='bye') && unscheduledForTeam(t) > 0) ? 'ring-2 ring-amber-400' : '']"
+                    :title="cellTitle(wk)"
+                  >
+                    <span v-if="wk.type==='confHome'">h</span>
+                    <span v-else-if="wk.type==='confAway'">a</span>
+                    <span v-else-if="wk.type==='oocGame'">{{ wk.away ? '@' : '' }}{{ wk.opponent }}</span>
+                    <span v-else-if="wk.type==='bye'">BYE</span>
+                    <span v-else-if="wk.type==='lockedOOC'">{{ wk.away ? '@' : '' }}{{ wk.opponent }}</span>
+                    <span v-else>&nbsp;</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Rules & Format -->
+      <section v-else class="max-w-none">
+        <h2>Scheduling Rules</h2>
+        <ol>
+          <li><strong>Game Limit</strong>: Each team can play a maximum of 12 games total.</li>
+          <li><strong>No Repeat Matchups</strong>: Teams cannot play the same opponent twice.</li>
+          <li><strong>Weekly Limit</strong>: Teams can only play 1 game per week.</li>
+          <li><strong>Week 0 Preference</strong>: Week 0 should remain empty when possible (optional setting).</li>
+          <li><strong>Preserve Existing Games</strong>: Never modify cells that already contain team names.</li>
+          <li><strong>Conference Restriction</strong>: Out-of-conference games only - teams cannot play opponents from their own conference.</li>
+          <li><strong>Home/Away Balance</strong>: Each team should have as close to 6 home games as possible.</li>
+          <li><strong>Home/Away Notation</strong>: Away games must be indicated with '@' symbol before opponent name.</li>
+          <li><strong>BYE Weeks</strong>: Empty weeks can be marked as <code>BYE</code>, up to 3 per team. The generator tries to give teams an equal number of BYEs; if not possible, extra empty weeks remain blank.</li>
+        </ol>
+
+        <h2>CSV File Format</h2>
+        <pre><code>Column A: Team Name (text)
+Column B: Conference (text)
+Column C: OOC Games Needed (number)
+Columns D-Q: Weeks 0-13 (h/a/empty/opponent)
+        </code></pre>
+        <p>
+          Columns D through Q denote each week:
+          <ul>
+            <li><code>h</code> = Home conference game (unchangeable)</li>
+            <li><code>a</code> = Away conference game (unchangeable)</li>
+            <li><code>BYE</code> = Bye week (at most 3 per team)</li>
+            <li>Empty = Available for OOC scheduling</li>
+            <li>Team name = Already scheduled OOC opponent (unchangeable)</li>
+          </ul>
+        </p>
+
+        <h3>Example CSV Row</h3>
+        <pre><code>Alabama,SEC,2,,,,,,,,h,a,h,a,,h,h</code></pre>
+
+        <h2>How the Generator Works</h2>
+        <ol>
+          <li>Parse &amp; Validate: Read CSV and verify format correctness.</li>
+          <li>Analyze Constraints: Compute available weeks and home/away needs.</li>
+          <li>Sort by Difficulty: Prioritize teams with fewer options.</li>
+          <li>Generate Matchups: Use backtracking to find pairings.</li>
+          <li>Balance Home/Away: Prefer 6/6 when possible.</li>
+          <li>Validate Solution: Ensure all rules are met.</li>
+          <li>Retry if Needed: Backtrack and explore alternatives.</li>
+        </ol>
+
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li>Cannot find valid schedule: Check available weeks and conference distribution.</li>
+          <li>Home/away imbalance: Some imbalance may be unavoidable due to constraints.</li>
+          <li>CSV won't upload: Ensure true CSV, consistent columns, and no special characters.</li>
+        </ul>
+      </section>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+  </html>

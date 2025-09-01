@@ -1,0 +1,8 @@
+/* Custom styles scaffold. Tailwind provides most styling. */
+
+/* Improve focus visibility on table cells when ring applied */
+.ring-amber-400 { box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.8); }
+
+/* Sticky header helper for wide tables (Tailwind sticky class already used) */
+thead.sticky th { background-color: #f3f4f6; }
+
